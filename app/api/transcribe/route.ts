@@ -34,6 +34,14 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    // Verifică că API key-ul este setat
+    if (!process.env.GEMINI_API_KEY) {
+      return NextResponse.json(
+        { error: 'GEMINI_API_KEY nu este configurat' },
+        { status: 500 }
+      )
+    }
+
     // Convertește fișierul în base64
     const bytes = await audioFile.arrayBuffer()
     const buffer = Buffer.from(bytes)
@@ -55,43 +63,71 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     console.error('Eroare la transcriere:', error)
     return NextResponse.json(
-      { error: 'Eroare la procesarea fișierului audio' },
+      { error: 'Eroare la procesarea fișierului audio: ' + error.message },
       { status: 500 }
     )
   }
 }
 
 async function transcribeWithGemini(audioBase64: string, fileName: string) {
-  const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash-exp' })
-  
-  const prompt = `
-  Transcrie acest fișier audio din română. 
-  Acesta este un audio din înregistrări judiciare.
-  
-  Te rog să:
-  1. Transcrie textul exact din română
-  2. Identifică vorbitorii diferiți și marchează-i cu [Vorbitor 1], [Vorbitor 2], etc.
-  3. Furnizează timestamp-uri pentru fiecare segment în format [MM:SS]
-  4. Păstrează structura și formatul original al conversației
-  5. Include și sunetele de fundal relevante (tuse, râsete, etc.) în paranteze
-  
-  Răspunde doar cu transcrierea, fără comentarii suplimentare.
-  `
+  try {
+    // Încearcă cu modelul standard
+    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' })
+    
+    const prompt = `
+    Transcrie acest fișier audio din română. 
+    Acesta este un audio din înregistrări judiciare.
+    
+    Te rog să:
+    1. Transcrie textul exact din română
+    2. Identifică vorbitorii diferiți și marchează-i cu [Vorbitor 1], [Vorbitor 2], etc.
+    3. Furnizează timestamp-uri pentru fiecare segment în format [MM:SS]
+    4. Păstrează structura și formatul original al conversației
+    5. Include și sunetele de fundal relevante (tuse, râsete, etc.) în paranteze
+    
+    Răspunde doar cu transcrierea, fără comentarii suplimentare.
+    `
 
-  const result = await model.generateContent([
-    prompt,
-    {
-      inlineData: {
-        mimeType: 'audio/mpeg',
-        data: audioBase64
+    const result = await model.generateContent([
+      prompt,
+      {
+        inlineData: {
+          mimeType: 'audio/mpeg',
+          data: audioBase64
+        }
       }
-    }
-  ])
+    ])
 
-  const response = await result.response
-  const text = response.text()
-  
-  return parseTranscriptionResponse(text, fileName)
+    const response = await result.response
+    const text = response.text()
+    
+    return parseTranscriptionResponse(text, fileName)
+  } catch (error) {
+    console.error('Eroare cu Gemini:', error)
+    
+    // Încearcă cu modelul alternativ dacă primul eșuează
+    try {
+      const model2 = genAI.getGenerativeModel({ model: 'gemini-1.5-pro' })
+      
+      const result2 = await model2.generateContent([
+        'Transcrie acest fișier audio din română. Răspunde doar cu transcrierea.',
+        {
+          inlineData: {
+            mimeType: 'audio/mpeg',
+            data: audioBase64
+          }
+        }
+      ])
+
+      const response2 = await result2.response
+      const text2 = response2.text()
+      
+      return parseTranscriptionResponse(text2, fileName)
+    } catch (error2) {
+      console.error('Eroare cu modelul alternativ:', error2)
+      throw new Error('Eroare la transcrierea cu Gemini: ' + error.message)
+    }
+  }
 }
 
 function parseTranscriptionResponse(text: string, fileName: string) {
